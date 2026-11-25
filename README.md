@@ -41,7 +41,7 @@ Endpoints: `POST /v1/auth/signup`, `POST /v1/auth/login`, `GET /v1/me`, `POST|GE
 
 `tests/` covers auth, tenant isolation, pagination edges, idempotency replay, conflict and concurrency, the migration runner, problem+json, logs, rate limiting, OpenAPI, health and the shutdown process. The CI workflow runs typecheck, lint, tests and build with a `postgres:17` service container.
 
-63 tests in 10 files pass against a real PostgreSQL 16 (one throwaway database per test file). CI uses a `postgres:17` service container; I have not run the suite on 17. A fresh clone passes `npm ci`, typecheck, lint, the tests and `npm run build`.
+63 tests in 10 files pass against a real PostgreSQL 16 (one throwaway database per test file). CI runs the suite on a `postgres:17` service container and passes there too (GitHub Actions, 2026-11-25). A fresh clone passes `npm ci`, typecheck, lint, the tests and `npm run build`.
 
 ### What running it found
 
