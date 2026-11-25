@@ -14,6 +14,16 @@ afterAll(async () => {
   await db.drop();
 });
 
+/** Each test gets its own database: they all use version numbers like 001, so sharing one would collide. */
+async function withDb<T>(fn: (pool: Awaited<ReturnType<typeof createTestDb>>["pool"]) => Promise<T>): Promise<T> {
+  const own = await createTestDb();
+  try {
+    return await fn(own.pool);
+  } finally {
+    await own.drop();
+  }
+}
+
 async function dirWith(files: Record<string, string>): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "migrations-"));
   for (const [name, sql] of Object.entries(files)) await writeFile(join(dir, name), sql);
@@ -32,36 +42,44 @@ describe("migration runner", () => {
   });
 
   it("applies only the new file when one is added", async () => {
-    const dir = await dirWith({ "001_a.sql": "create table a1 (id int);" });
-    await migrate(db.pool, dir);
-    await writeFile(join(dir, "002_b.sql"), "create table b1 (id int);");
-    expect((await migrate(db.pool, dir)).applied).toEqual(["002_b.sql"]);
+    await withDb(async (pool) => {
+      const dir = await dirWith({ "001_a.sql": "create table a1 (id int);" });
+      await migrate(pool, dir);
+      await writeFile(join(dir, "002_b.sql"), "create table b1 (id int);");
+      expect((await migrate(pool, dir)).applied).toEqual(["002_b.sql"]);
+    });
   });
 
   it("rolls back a failing migration completely and records nothing", async () => {
-    const dir = await dirWith({
-      "001_ok.sql": "create table ok_t (id int);",
-      "002_bad.sql": "create table half_t (id int); select * from does_not_exist;",
+    await withDb(async (pool) => {
+      const dir = await dirWith({
+        "001_ok.sql": "create table ok_t (id int);",
+        "002_bad.sql": "create table half_t (id int); select * from does_not_exist;",
+      });
+      await expect(migrate(pool, dir)).rejects.toThrow(/002_bad.sql failed and was rolled back/);
+      const half = await pool.query<{ t: string | null }>("select to_regclass('half_t') as t");
+      expect(half.rows[0]?.t).toBeNull();
+      const rec = await pool.query("select name from schema_migrations where name like '%_bad.sql' or name = '001_ok.sql'");
+      expect(rec.rows.map((r: { name: string }) => r.name)).toEqual(["001_ok.sql"]);
     });
-    await expect(migrate(db.pool, dir)).rejects.toThrow(/002_bad.sql failed and was rolled back/);
-    const half = await db.pool.query<{ t: string | null }>("select to_regclass('half_t') as t");
-    expect(half.rows[0]?.t).toBeNull();
-    const rec = await db.pool.query("select name from schema_migrations where name like '%_bad.sql' or name = '001_ok.sql'");
-    expect(rec.rows.map((r: { name: string }) => r.name)).toEqual(["001_ok.sql"]);
   });
 
   it("refuses to run when an applied migration was edited", async () => {
-    const dir = await dirWith({ "001_x.sql": "create table edit_t (id int);" });
-    await migrate(db.pool, dir);
-    await writeFile(join(dir, "001_x.sql"), "create table edit_t (id int, extra int);");
-    await expect(migrate(db.pool, dir)).rejects.toThrow(/changed after it was applied. Add a new migration/);
+    await withDb(async (pool) => {
+      const dir = await dirWith({ "001_x.sql": "create table edit_t (id int);" });
+      await migrate(pool, dir);
+      await writeFile(join(dir, "001_x.sql"), "create table edit_t (id int, extra int);");
+      await expect(migrate(pool, dir)).rejects.toThrow(/changed after it was applied. Add a new migration/);
+    });
   });
 
   it("refuses to run when an applied migration's file is gone", async () => {
-    const dir = await dirWith({ "001_y.sql": "create table gone_t (id int);" });
-    await migrate(db.pool, dir);
-    const other = await dirWith({ "002_z.sql": "select 1;" });
-    await expect(migrate(db.pool, other)).rejects.toThrow(/file is missing/);
+    await withDb(async (pool) => {
+      const dir = await dirWith({ "001_y.sql": "create table gone_t (id int);" });
+      await migrate(pool, dir);
+      const other = await dirWith({ "002_z.sql": "select 1;" });
+      await expect(migrate(pool, other)).rejects.toThrow(/file is missing/);
+    });
   });
 
   it("concurrent runners apply each migration exactly once", async () => {

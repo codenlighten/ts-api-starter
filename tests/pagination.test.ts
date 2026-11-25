@@ -6,7 +6,9 @@ describe("cursor codec", () => {
   it("round-trips and rejects anything it did not produce", () => {
     expect(decodeCursor(encodeCursor("42"))).toBe("42");
     expect(decodeCursor(undefined)).toBeNull();
-    for (const bad of ["", "!!!", encodeCursor("0"), encodeCursor("-1"), encodeCursor("1; drop table x"), "NDI"]) {
+    // "NDI=" decodes to 42 but is not the canonical (unpadded) encoding, so it must be refused.
+    expect(decodeCursor("NDI")).toBe("42");
+    for (const bad of ["", "!!!", encodeCursor("0"), encodeCursor("-1"), encodeCursor("1; drop table x"), "NDI="]) {
       expect(() => decodeCursor(bad)).toThrow(/cursor is not valid/);
     }
   });

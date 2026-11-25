@@ -16,8 +16,11 @@ function readConfig(): Config {
 
 const cfg = readConfig();
 
-const pool = createPool(cfg.DATABASE_URL);
+// The logger does not exist until the app is built, so the pool reports through a late-bound reference.
+let log: { error: (obj: object, msg: string) => void } = { error: (obj, msg) => console.error(msg, obj) };
+const pool = createPool(cfg.DATABASE_URL, 10, (err) => log.error({ err }, "idle database client error; the pool will reconnect"));
 const app = await buildApp({ cfg, pool });
+log = app.log;
 await app.listen({ port: cfg.PORT, host: "0.0.0.0" });
 
 let stopping = false;

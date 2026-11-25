@@ -6,12 +6,13 @@ import { loadConfig, type Config } from "../src/config.js";
 import { MIGRATIONS_DIR } from "../src/db/paths.js";
 import { migrate } from "../src/db/migrate.js";
 
-export const ADMIN_URL = process.env.TEST_DATABASE_URL ?? "postgres://postgres:postgres@localhost:54329/postgres";
+export const ADMIN_URL = process.env.TEST_DATABASE_URL ?? "postgres://app:app@localhost:54329/postgres";
 
 /** A throwaway database, so test files can run in parallel without seeing each other. */
 export async function createTestDb(): Promise<{ url: string; pool: pg.Pool; drop: () => Promise<void> }> {
   const name = `t_${randomBytes(6).toString("hex")}`;
   const admin = new pg.Pool({ connectionString: ADMIN_URL, max: 1 });
+  admin.on("error", () => {}); // test helper: connections are killed on purpose when databases are dropped
   try {
     await admin.query(`create database ${name}`);
   } catch (err) {
@@ -21,6 +22,7 @@ export async function createTestDb(): Promise<{ url: string; pool: pg.Pool; drop
   const url = new URL(ADMIN_URL);
   url.pathname = `/${name}`;
   const pool = new pg.Pool({ connectionString: url.toString(), max: 20 });
+  pool.on("error", () => {}); // `drop database ... with (force)` kills connections that are still open
   return {
     url: url.toString(),
     pool,

@@ -87,11 +87,20 @@ describe("openapi", () => {
 });
 
 describe("rate limiting", () => {
+  // Its own app: the limiter counts per route, so requests made by other tests must not use up the budget.
+  let rl: TestApp;
+  beforeAll(async () => {
+    rl = await startApp({ RATE_LIMIT_MAX: "30", AUTH_RATE_LIMIT_MAX: "3" });
+  });
+  afterAll(async () => {
+    await rl.close();
+  });
+
   it("limits auth endpoints tighter and answers with problem+json and Retry-After", async () => {
     const codes: number[] = [];
     let last;
     for (let i = 0; i < 5; i++) {
-      last = await t.app.inject({ method: "POST", url: "/v1/auth/login", payload: { email: "x@example.com", password: "whatever" } });
+      last = await rl.app.inject({ method: "POST", url: "/v1/auth/login", payload: { email: "x@example.com", password: "whatever" } });
       codes.push(last.statusCode);
     }
     expect(codes).toEqual([401, 401, 401, 429, 429]);
@@ -101,6 +110,6 @@ describe("rate limiting", () => {
   });
 
   it("never limits health checks", async () => {
-    for (let i = 0; i < 40; i++) expect((await t.app.inject({ url: "/healthz" })).statusCode).toBe(200);
+    for (let i = 0; i < 40; i++) expect((await rl.app.inject({ url: "/healthz" })).statusCode).toBe(200);
   });
 });

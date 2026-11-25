@@ -41,7 +41,30 @@ Endpoints: `POST /v1/auth/signup`, `POST /v1/auth/login`, `GET /v1/me`, `POST|GE
 
 `tests/` covers auth, tenant isolation, pagination edges, idempotency replay, conflict and concurrency, the migration runner, problem+json, logs, rate limiting, OpenAPI, health and the shutdown process. The CI workflow runs typecheck, lint, tests and build with a `postgres:17` service container.
 
-Status of this checkout, stated plainly: typecheck and lint pass, and the 12 tests that need no database (config, password, token, cursor codec) pass. **The database-backed tests have been written but not yet run, and the deliberate breaks (drop the tenant filter, break idempotency, skip token expiry, off-by-one in the cursor, skip migration recording) have not yet been performed.** The README will list them with the test that caught each once that has happened.
+63 tests in 10 files pass against a real PostgreSQL 16 (one throwaway database per test file). CI uses a `postgres:17` service container; I have not run the suite on 17. A fresh clone passes `npm ci`, typecheck, lint, the tests and `npm run build`.
+
+### What running it found
+
+The first run of the database tests failed 6 of 61, and all of them were instructive:
+
+- Four migration tests shared one database and collided on version `001` (a test-design bug, now one database per test).
+- The rate-limit test shared an app with an earlier login test, which had already spent one of the three allowed attempts.
+- A cursor test treated `"NDI"` as invalid, but it is the correct encoding of `42`. The non-canonical case is `"NDI="`.
+- After those, vitest still reported 9 unhandled errors: **the connection pool had no `error` listener.** In node-postgres an idle connection killed from outside (database restart, failover, an admin terminating the backend) then crashes the whole Node process. `createPool` now reports the error and lets the pool reconnect, and `tests/pool.test.ts` kills an idle connection and checks the process survives. `withTx` also keeps the original error and destroys the connection if the rollback itself fails.
+
+### Deliberate breaks
+
+Each change below was made on its own, the full suite run, and the code restored (63 of 63 pass afterwards). Every break failed the tests named here.
+
+| Break | Tests that failed |
+|---|---|
+| Drop the tenant filter in `getProject` | `tenancy`: tenant B reads A's project; tenant B lists or adds tasks in A's project |
+| Idempotency key re-claimed instead of replayed | 4 `idempotency` tests, including 20 parallel requests creating one row |
+| Skip the token expiry check | `auth` and `crypto`: rejects an expired token |
+| Cursor off-by-one (`seq <=` instead of `<`) | 6 `pagination` tests (repeated rows, extra empty page) |
+| Do not record applied migrations | 6 `migrate` tests (idempotent run, concurrent runners, edit detection) |
+| Remove the pool error listener | `pool`: survives an idle connection being killed |
+| Accept non-canonical cursors | `pagination`: cursor codec rejects anything it did not produce |
 
 ## Limits
 
