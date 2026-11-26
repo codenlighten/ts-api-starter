@@ -36,6 +36,7 @@ const TITLES: Record<number, string> = {
   422: "Unprocessable Content",
   429: "Too Many Requests",
   500: "Internal Server Error",
+  503: "Service Unavailable",
 };
 
 function problem(status: number, code: string, detail: string, requestId: string): Problem {

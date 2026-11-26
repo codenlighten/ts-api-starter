@@ -1,4 +1,12 @@
+import { isIP } from "node:net";
 import { z } from "zod";
+
+function isAddressOrRange(entry: string): boolean {
+  const [address = "", bits, ...rest] = entry.split("/");
+  const family = isIP(address);
+  if (family === 0 || rest.length > 0) return false;
+  return bits === undefined || (/^\d{1,3}$/.test(bits) && Number(bits) <= (family === 4 ? 32 : 128));
+}
 
 const schema = z.object({
   DATABASE_URL: z.string().min(1, "set it to a postgres:// connection string"),
@@ -12,6 +20,11 @@ const schema = z.object({
   SCRYPT_COST_LOG2: z.coerce.number().int().min(4).max(20).default(15),
   SHUTDOWN_DELAY_MS: z.coerce.number().int().min(0).default(2000),
   SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1).default(10_000),
+  TRUSTED_PROXIES: z
+    .string()
+    .default("")
+    .transform((v) => v.split(",").map((e) => e.trim()).filter(Boolean))
+    .refine((list) => list.every(isAddressOrRange), "list IP addresses or CIDR ranges, separated by commas"),
 });
 
 export type Config = z.infer<typeof schema>;

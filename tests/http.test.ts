@@ -63,7 +63,10 @@ describe("health", () => {
   it("readyz reports 503 while draining, healthz stays 200", async () => {
     t.app.lifecycle.draining = true;
     try {
-      expect((await t.app.inject({ url: "/readyz" })).statusCode).toBe(503);
+      const res = await t.app.inject({ url: "/readyz" });
+      expect(res.statusCode).toBe(503);
+      expect(res.headers["content-type"]).toContain("application/problem+json");
+      expect(res.json()).toMatchObject({ status: 503, code: "draining", title: "Service Unavailable" });
       expect((await t.app.inject({ url: "/healthz" })).statusCode).toBe(200);
     } finally {
       t.app.lifecycle.draining = false;
@@ -72,6 +75,12 @@ describe("health", () => {
 });
 
 describe("openapi", () => {
+  it("documents the 503 that readiness can answer", async () => {
+    const doc = (await t.app.inject({ url: "/openapi.json" })).json<{ paths: Record<string, { get: { responses: Record<string, unknown> } }> }>();
+    expect(Object.keys(doc.paths["/readyz"]?.get.responses ?? {})).toContain("503");
+    expect(Object.keys(doc.paths["/healthz"]?.get.responses ?? {})).not.toContain("503");
+  });
+
   it("is generated from the route schemas", async () => {
     const doc = (await t.app.inject({ url: "/openapi.json" })).json<{
       openapi: string;

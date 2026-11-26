@@ -50,6 +50,62 @@ describe("migration runner", () => {
     });
   });
 
+  it("refuses a file that ends the runner's transaction, before running any of it", async () => {
+    await withDb(async (pool) => {
+      const dir = await dirWith({ "001_sneaky.sql": "create table sneaky_t (id int);\ncommit;\nselect * from does_not_exist;" });
+      await expect(migrate(pool, dir)).rejects.toThrow(/001_sneaky.sql.*transaction/);
+      const { rows } = await pool.query<{ t: string | null }>("select to_regclass('sneaky_t') as t");
+      expect(rows[0]?.t).toBeNull();
+    });
+  });
+
+  it.each(["BEGIN", "end", "Rollback", "abort", "start transaction", "/* x */ -- y\n commit work"])(
+    "refuses the statement %j",
+    async (statement) => {
+      const dir = await dirWith({ "001_a.sql": `select 1;\n${statement};\n` });
+      await expect(loadMigrations(dir)).rejects.toThrow(MigrationError);
+    },
+  );
+
+  it("accepts those words inside strings, comments, names and function bodies", async () => {
+    await withDb(async (pool) => {
+      const dir = await dirWith({
+        "001_words.sql": [
+          "-- commit; rollback;",
+          "/* begin; /* nested */ end; */",
+          "create table commit_log (\"end\" text default 'it''s; commit;', e text default E'\\'; rollback;');",
+          "create function noop() returns void language plpgsql as $body$ begin null; end; $body$;",
+          "do $$ begin perform 1; end $$;",
+          "savepoint s; rollback to savepoint s; rollback work to s;",
+        ].join("\n"),
+      });
+      expect((await migrate(pool, dir)).applied).toEqual(["001_words.sql"]);
+    });
+  });
+
+  it("applies files in numeric order, not alphabetical order", async () => {
+    await withDb(async (pool) => {
+      const dir = await dirWith({ "999_first.sql": "create table n1 (id int);", "1000_second.sql": "alter table n1 add column x int;" });
+      expect((await migrate(pool, dir)).applied).toEqual(["999_first.sql", "1000_second.sql"]);
+    });
+  });
+
+  it("refuses two spellings of one version", async () => {
+    const dir = await dirWith({ "001_a.sql": "select 1;", "0001_b.sql": "select 1;" });
+    await expect(loadMigrations(dir)).rejects.toThrow(/share version/);
+  });
+
+  it("refuses a new file older than one already applied", async () => {
+    await withDb(async (pool) => {
+      const dir = await dirWith({ "001_a.sql": "create table o1 (id int);", "003_c.sql": "create table o3 (id int);" });
+      await migrate(pool, dir);
+      await writeFile(join(dir, "002_b.sql"), "create table o2 (id int);");
+      await expect(migrate(pool, dir)).rejects.toThrow(/002_b.sql is older than 003_c.sql/);
+      const { rows } = await pool.query<{ t: string | null }>("select to_regclass('o2') as t");
+      expect(rows[0]?.t).toBeNull();
+    });
+  });
+
   it("rolls back a failing migration completely and records nothing", async () => {
     await withDb(async (pool) => {
       const dir = await dirWith({

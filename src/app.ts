@@ -31,6 +31,9 @@ export async function buildApp(deps: Deps, logStream?: DestinationStream): Promi
       return typeof given === "string" && REQUEST_ID.test(given) ? given : randomUUID();
     },
     bodyLimit: 100_000,
+    // X-Forwarded-For is believed only from the proxies named here; from anyone else it would let a
+    // caller pick the address that rate limits count against.
+    trustProxy: cfg.TRUSTED_PROXIES.length > 0 ? cfg.TRUSTED_PROXIES : false,
   });
   app.decorate("lifecycle", { draining: false });
 
@@ -40,7 +43,8 @@ export async function buildApp(deps: Deps, logStream?: DestinationStream): Promi
   });
   app.setErrorHandler((err, req, reply) => {
     const p = toProblem(err, req.id);
-    if (p.status >= 500) req.log.error({ err }, "unhandled error");
+    // A deliberate HttpError (readiness saying "not now") is an answer, not a fault to alarm on.
+    if (p.status >= 500 && !(err instanceof HttpError)) req.log.error({ err }, "unhandled error");
     return reply.status(p.status).type("application/problem+json").send(p);
   });
   app.setNotFoundHandler((req, reply) => {

@@ -47,7 +47,8 @@ export function buildOpenApi(specs: AnySpec[]) {
         },
         "400": { description: "Validation failed", ...problem },
         ...(s.auth ? { "401": { description: "Missing, invalid or expired token", ...problem } } : {}),
-        "429": { description: "Rate limited", ...problem },
+        ...(s.rateLimit === false ? {} : { "429": { description: "Rate limited", ...problem } }),
+        ...Object.fromEntries(Object.entries(s.errors ?? {}).map(([status, description]) => [status, { description, ...problem }])),
       },
     };
   }

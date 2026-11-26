@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type pg from "pg";
+import { transactionControl } from "./sql.js";
 
 export class MigrationError extends Error {}
 
@@ -23,19 +24,27 @@ const LOCK_KEY = 726_351_001;
 const FILE_PATTERN = /^(\d{3,})_([a-z0-9_]+)\.sql$/;
 
 export async function loadMigrations(dir: string): Promise<MigrationFile[]> {
-  const names = (await readdir(dir)).filter((n) => n.endsWith(".sql")).sort();
-  const seen = new Set<string>();
+  const names = (await readdir(dir)).filter((n) => n.endsWith(".sql"));
+  const seen = new Set<bigint>();
   const out: MigrationFile[] = [];
   for (const file of names) {
     const m = FILE_PATTERN.exec(file);
     if (!m) throw new MigrationError(`Bad migration file name "${file}": use NNN_snake_case.sql.`);
     const version = m[1] as string;
-    if (seen.has(version)) throw new MigrationError(`Two migrations share version ${version}.`);
-    seen.add(version);
+    // Compared as numbers: 001 and 0001 are the same version, and 999 comes before 1000.
+    if (seen.has(BigInt(version))) throw new MigrationError(`Two migrations share version ${version}.`);
+    seen.add(BigInt(version));
     const sql = await readFile(join(dir, file), "utf8");
+    // A COMMIT inside a file would end the runner's transaction and leave half a migration behind.
+    const control = transactionControl(sql);
+    if (control) {
+      throw new MigrationError(
+        `${file} contains a transaction statement ("${control.slice(0, 40)}"). The runner puts each file in its own transaction: remove it. Function bodies belong in $$ quotes.`,
+      );
+    }
     out.push({ version, name: file, sql, checksum: createHash("sha256").update(sql).digest("hex") });
   }
-  return out;
+  return out.sort((a, b) => (BigInt(a.version) < BigInt(b.version) ? -1 : 1));
 }
 
 export async function migrate(pool: pg.Pool, dir: string): Promise<MigrateResult> {
@@ -63,6 +72,15 @@ export async function migrate(pool: pg.Pool, dir: string): Promise<MigrateResult
       if (file.checksum !== row.checksum) {
         throw new MigrationError(`Migration ${row.name} changed after it was applied. Add a new migration instead of editing an old one.`);
       }
+    }
+
+    const latest = rows.reduce<(typeof rows)[number] | undefined>(
+      (max, row) => (max === undefined || BigInt(row.version) > BigInt(max.version) ? row : max),
+      undefined,
+    );
+    const late = latest && files.find((f) => !done.has(f.version) && BigInt(f.version) < BigInt(latest.version));
+    if (late) {
+      throw new MigrationError(`Migration ${late.name} is older than ${latest.name}, which is already applied. Give it a newer version number.`);
     }
 
     const result: MigrateResult = { applied: [], alreadyApplied: rows.map((r) => r.name) };

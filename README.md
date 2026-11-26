@@ -20,9 +20,9 @@ Tests need the same Postgres (`npm test`; set `TEST_DATABASE_URL` to use another
 
 - **Tenant isolation is enforced in SQL, twice.** Every query filters on `tenant_id`, and `tasks` carries a composite foreign key `(tenant_id, project_id)`, so the database refuses a task that points at another tenant's project even if application code is wrong. Another tenant's ids return 404, not 403, so they do not leak existence.
 - **Idempotency keys are transactional.** The key row and the created resource commit together; a concurrent request with the same key blocks on the unique index and then replays the stored response. Same key with a different request gives 422. A failed request rolls back its key, so it can be retried. A test fires 20 parallel POSTs with one key and expects one row.
-- **A migration runner with guarantees**: one advisory lock (parallel runners apply each file once), one transaction per file (a failing file leaves no trace), checksums (editing an applied file, or deleting it, is an error).
+- **A migration runner with guarantees**: one advisory lock (parallel runners apply each file once), one transaction per file (a failing file leaves no trace, and a file that tries to `COMMIT` or `BEGIN` itself is refused before it runs), numeric version order (a new file older than an applied one is refused), checksums (editing an applied file, or deleting it, is an error).
 - **Auth with no auth library**: scrypt password hashes with parameters stored in the hash, a small HS256 token implementation that accepts exactly one algorithm and checks expiry, the same 401 for unknown email and wrong password.
-- **Operational basics**: env validated at boot with all problems listed, pino JSON logs with a request id on every line (bearer tokens redacted), RFC 9457 `application/problem+json` errors with a stable `code`, rate limits (stricter on auth), `/healthz`, `/readyz` that turns 503 while draining, graceful SIGTERM shutdown, and an OpenAPI 3.1 document generated from the same zod schemas that validate requests (`/openapi.json`).
+- **Operational basics**: env validated at boot with all problems listed, pino JSON logs with a request id on every line (bearer tokens redacted), RFC 9457 `application/problem+json` errors with a stable `code`, rate limits (stricter on auth), `/healthz`, `/readyz` that answers 503 (problem+json) while draining or when the database does not answer within 2 seconds, a 5 second limit on waiting for a database connection, `X-Forwarded-For` believed only from proxies you name in `TRUSTED_PROXIES`, graceful SIGTERM shutdown, and an OpenAPI 3.1 document generated from the same zod schemas that validate requests (`/openapi.json`).
 
 ## Layout
 
@@ -33,7 +33,7 @@ Tests need the same Postgres (`npm test`; set `TEST_DATABASE_URL` to use another
 | `src/idempotency.ts` | `runIdempotent`, the transactional key logic |
 | `src/pagination.ts` | Keyset cursor over an identity column (`limit + 1` fetch), opaque cursor |
 | `src/repo/*.ts` | All SQL, parameterised |
-| `src/db/migrate.ts`, `migrations/` | Runner and plain `.sql` files |
+| `src/db/migrate.ts`, `sql.ts`, `migrations/` | Runner, the check for transaction statements, and plain `.sql` files |
 | `src/auth/*.ts` | scrypt and token code |
 | `tests/` | Vitest against a real Postgres |
 
@@ -43,7 +43,21 @@ Endpoints: `POST /v1/auth/signup`, `POST /v1/auth/login`, `GET /v1/me`, `POST|GE
 
 `tests/` covers auth, tenant isolation, pagination edges, idempotency replay, conflict and concurrency, the migration runner, problem+json, logs, rate limiting, OpenAPI, health and the shutdown process. The CI workflow runs typecheck, lint, tests and build with a `postgres:17` service container.
 
-63 tests in 10 files pass against a real PostgreSQL 16 (one throwaway database per test file). CI runs the suite on a `postgres:17` service container and passes there too (GitHub Actions, 2026-11-25). A fresh clone passes `npm ci`, typecheck, lint, the tests and `npm run build`.
+80 tests in 12 files pass against a real PostgreSQL 17 (one throwaway database per test file), three runs in a row on a Linux machine, and in CI on a `postgres:17` service container. A fresh clone passes `npm ci`, typecheck, lint, the tests and `npm run build`.
+
+### What a code review found
+
+An independent AI review of the source (2026-11-26) found five faults that the first 63 tests did not. Each got a test that failed on the old code, then a fix:
+
+| Fault | Fix |
+|---|---|
+| A migration containing `commit` ended the runner's transaction, so a later error left half the file applied | Files with transaction statements are refused; strings, comments and function bodies are skipped over |
+| Versions sorted as text (`1000` before `999`), and a late file with an older number was simply applied | Numeric order; an older unapplied file is an error |
+| `/readyz` waited for ever on a database that had gone silent, and so did every other query | Connection wait limited to 5 s, readiness to 2 s |
+| The 503 answers were plain JSON and missing from the OpenAPI document | problem+json with a stable `code`, documented |
+| Behind a reverse proxy all users shared one rate limit | `TRUSTED_PROXIES`, empty by default so a caller cannot pick its own address |
+
+Seventeen deliberate breaks of the new code were each caught by a test.
 
 ### What running it found
 
@@ -54,7 +68,7 @@ The first run of the database tests failed 6 of 61, and all of them were instruc
 - A cursor test treated `"NDI"` as invalid, but it is the correct encoding of `42`. The non-canonical case is `"NDI="`.
 - After those, vitest still reported 9 unhandled errors: **the connection pool had no `error` listener.** In node-postgres an idle connection killed from outside (database restart, failover, an admin terminating the backend) then crashes the whole Node process. `createPool` now reports the error and lets the pool reconnect, and `tests/pool.test.ts` kills an idle connection and checks the process survives. `withTx` also keeps the original error and destroys the connection if the rollback itself fails.
 
-### Deliberate breaks
+### Deliberate breaks of the first version
 
 Each change below was made on its own, the full suite run, and the code restored (63 of 63 pass afterwards). Every break failed the tests named here.
 
@@ -77,6 +91,8 @@ Each change below was made on its own, the full suite run, and the code restored
 - Email addresses are unique across tenants, and there is no email verification or password reset.
 - Pagination is newest-first only, with no total counts.
 - No performance numbers have been measured.
+- The migration check is not an SQL parser. SQL-standard function bodies written `BEGIN ATOMIC ... END` are refused; write function bodies in `$$` quotes.
+- A query that hangs on an already open connection is not cut off (only waiting for a connection and the readiness probe are).
 
 ## Dependencies
 

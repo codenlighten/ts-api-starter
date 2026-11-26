@@ -2,14 +2,18 @@ import pg from "pg";
 
 export type Queryable = Pick<pg.Pool, "query">;
 
+const CONNECT_TIMEOUT_MS = 5000;
+
 /**
  * Creates the connection pool. An idle connection can be killed from outside (database restart,
  * failover, an admin terminating the backend). pg then emits "error" on the pool, and with no
  * listener Node treats it as an unhandled error and the whole API process dies. Here the error is
  * reported through `onError` and the pool discards that connection and opens a new one on demand.
+ *
+ * Waiting for a connection has a limit: without one, requests queue for ever when the database stops answering.
  */
 export function createPool(connectionString: string, max = 10, onError: (err: Error) => void = defaultOnError): pg.Pool {
-  const pool = new pg.Pool({ connectionString, max });
+  const pool = new pg.Pool({ connectionString, max, connectionTimeoutMillis: CONNECT_TIMEOUT_MS });
   pool.on("error", onError);
   return pool;
 }

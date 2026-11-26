@@ -43,6 +43,8 @@ export interface RouteSpec<
   query?: Q;
   body?: B;
   success: { status: number; schema: z.ZodType };
+  /** Error answers particular to this route, by status, for the OpenAPI document. */
+  errors?: Record<number, string>;
   /** Per-route limit per window; false switches it off (health checks). */
   rateLimit?: number | false;
   /** Accept the Idempotency-Key header (documented in OpenAPI). */
