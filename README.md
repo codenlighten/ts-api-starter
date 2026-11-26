@@ -1,5 +1,7 @@
 # ts-api-starter
 
+[![CI](https://github.com/codenlighten/ts-api-starter/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/codenlighten/ts-api-starter/actions/workflows/ci.yml)
+
 A multi-tenant projects-and-tasks HTTP API in Node 22 and strict TypeScript: Fastify, zod, Postgres through the `pg` driver, and a small SQL migration runner written for this repo. It shows back-end and API engineering with Postgres.
 
 ## Run it
