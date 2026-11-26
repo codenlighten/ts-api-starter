@@ -88,6 +88,8 @@ export async function migrate(pool: pg.Pool, dir: string): Promise<MigrateResult
       if (done.has(file.version)) continue;
       try {
         await client.query("begin");
+        // The check for transaction statements reads strings the standard way; make the server do the same.
+        await client.query("set local standard_conforming_strings = on");
         await client.query(file.sql);
         await client.query("insert into schema_migrations (version, name, checksum) values ($1, $2, $3)", [
           file.version,

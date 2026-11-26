@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import type pg from "pg";
 import { z } from "zod";
 import { HttpError } from "../http/errors.js";
 import { buildOpenApi } from "../http/openapi.js";
@@ -43,7 +44,9 @@ export function systemRoutes(r: Registrar, app: FastifyInstance, deps: Deps): vo
     handler: async () => {
       if (app.lifecycle.draining) throw new HttpError(503, "draining", "The process is shutting down.");
       try {
-        await within(deps.pool.query("select 1"), READY_TIMEOUT_MS);
+        // query_timeout ends the query itself and frees its connection; `within` also bounds the wait
+        // for a connection.
+        await within(deps.pool.query({ text: "select 1", query_timeout: READY_TIMEOUT_MS } as pg.QueryConfig), READY_TIMEOUT_MS);
       } catch {
         throw new HttpError(503, "database_unavailable", "The database did not answer.");
       }

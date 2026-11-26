@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadMigrations, migrate, MigrationError } from "../src/db/migrate.js";
+import { createPool } from "../src/db/pool.js";
 import { MIGRATIONS_DIR } from "../src/db/paths.js";
 import { createTestDb } from "./helpers.js";
 
@@ -66,6 +67,28 @@ describe("migration runner", () => {
       await expect(loadMigrations(dir)).rejects.toThrow(MigrationError);
     },
   );
+
+  it("cannot be fooled by a database that reads backslashes in strings as escapes", async () => {
+    await withDb(async (pool) => {
+      const { rows: db0 } = await pool.query<{ name: string }>("select current_database() as name");
+      await pool.query(`alter database ${db0[0]?.name} set standard_conforming_strings = off`);
+      const fresh = createPool(pool.options.connectionString as string, 2, () => {});
+      try {
+        // Read the standard way, as the check reads it, COMMIT is inside a string. Read with backslash
+        // escapes, the string ends just before it and COMMIT is real code.
+        const sql = String.raw`create table leaked_t (id int);
+select '\'';
+commit;
+--';
+select * from does_not_exist;`;
+        await expect(migrate(fresh, await dirWith({ "001_hidden.sql": sql }))).rejects.toThrow(MigrationError);
+        const { rows } = await fresh.query<{ t: string | null }>("select to_regclass('leaked_t') as t");
+        expect(rows[0]?.t).toBeNull();
+      } finally {
+        await fresh.end();
+      }
+    });
+  });
 
   it("accepts those words inside strings, comments, names and function bodies", async () => {
     await withDb(async (pool) => {

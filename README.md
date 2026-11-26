@@ -43,7 +43,7 @@ Endpoints: `POST /v1/auth/signup`, `POST /v1/auth/login`, `GET /v1/me`, `POST|GE
 
 `tests/` covers auth, tenant isolation, pagination edges, idempotency replay, conflict and concurrency, the migration runner, problem+json, logs, rate limiting, OpenAPI, health and the shutdown process. The CI workflow runs typecheck, lint, tests and build with a `postgres:17` service container.
 
-80 tests in 12 files pass against a real PostgreSQL 17 (one throwaway database per test file), three runs in a row on a Linux machine, and in CI on a `postgres:17` service container. A fresh clone passes `npm ci`, typecheck, lint, the tests and `npm run build`.
+82 tests in 12 files pass against a real PostgreSQL 17 (one throwaway database per test file), three runs in a row on a Linux machine, and in CI on a `postgres:17` service container. A fresh clone passes `npm ci`, typecheck, lint, the tests and `npm run build`.
 
 ### What a code review found
 
@@ -58,6 +58,8 @@ An independent AI review of the source (2026-11-26) found five faults that the f
 | Behind a reverse proxy all users shared one rate limit | `TRUSTED_PROXIES`, empty by default so a caller cannot pick its own address |
 
 Seventeen deliberate breaks of the new code were each caught by a test.
+
+A second review of the fixes found two gaps, both now covered by tests that failed first: on a database set to read backslashes in strings as escapes, a crafted file could hide a `COMMIT` from the check (the runner now forces the standard reading for each file), and a readiness probe that timed out left its query holding a pool connection (the query now has its own deadline).
 
 ### What running it found
 
